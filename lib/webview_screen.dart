@@ -8,6 +8,7 @@ import 'package:webview_flutter_android/webview_flutter_android.dart';
 import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 
 import 'config.dart';
+import 'credential_store.dart';
 import 'entry_parser.dart';
 
 /// WebView 页：真正把 dsh web 显示出来的地方。
@@ -22,12 +23,19 @@ class WebViewScreen extends StatefulWidget {
   const WebViewScreen({
     super.key,
     required this.entry,
+    required this.credentials,
     this.onOpenSettings,
     this.onChangeAddress,
   });
 
   /// 解析好的入口。带着可选的启动令牌（[EntryParseOk.token]）。
   final EntryParseOk entry;
+
+  /// 记住/读取 HTTP Basic 凭据。
+  ///
+  /// 由上层注入而不是自己 new：这样单元测试能塞假的，
+  /// 也符合"这层只管显示"的分工。
+  final CredentialStore credentials;
 
   /// 打开设置页的回调，由上层注入（这层不关心路由怎么走）。
   final VoidCallback? onOpenSettings;
@@ -50,10 +58,11 @@ class _WebViewScreenState extends State<WebViewScreen> {
   /// 非 null 表示当前处于错误状态，UI 显示重试页而不是 WebView。
   String? _error;
 
-  /// 记录是否已经放行过一次证书。
+  /// 正在用记住的凭据自动应答挑战。
   ///
-  /// 只用来在 UI 上给一次提示，**不参与放行判断** —— 放行判断永远是 host 白名单。
-  bool _certificateAccepted = false;
+  /// 有这个标志是因为 `onHttpAuthRequest` 可能**连续触发**（page + 子资源），
+  /// 凭据又不对时每一发都会回调。只弹一次框，别让用户被对话框淹没。
+  bool _authDialogOpen = false;
 
   @override
   void initState() {
@@ -106,29 +115,68 @@ class _WebViewScreenState extends State<WebViewScreen> {
   /// 正是"进入后黑屏"的原因。
   ///
   /// 所以这里自己弹框收口令，再用 `onProceed` 交给 WebView。
-  /// 口令只存在于这次回调的局部变量里，**不落盘、不打日志**。
+  ///
+  /// **流程**（`_answerAuth`）：
+  ///   1. 先看有没有记住这个 host 的凭据 → 有就直接送去（用户看不到框）
+  ///   2. 没有（或送去的被拒了）→ 弹框让用户输
+  ///   3. 用户在框里输的、且这次加载成功了 → 记下来给下次用
+  ///
+  /// 第 3 步的"加载成功"不好直接判定，所以这里的策略是**弹框后立刻记住**：
+  /// 输错了下次会自动送错的、再弹框，用户重输即可覆盖。
+  /// 代价是"输错一次会被记一次"，收益是不用去猜"这次到底成没成" ——
+  /// 对一个自用工具来说前者可接受，后者才是麻烦。
   Future<void> _onHttpAuthRequest(HttpAuthRequest request) async {
     if (!mounted) {
       request.onCancel();
       return;
     }
 
-    final _Credential? credential = await showDialog<_Credential>(
-      context: context,
-      barrierDismissible: false,
-      builder: (BuildContext context) => _BasicAuthDialog(host: request.host),
-    );
+    // 1) 有记住的凭据就直接用，不打扰用户。
+    final BasicCredential? saved = await widget.credentials.read(request.host);
+    if (!mounted) {
+      request.onCancel();
+      return;
+    }
+    if (saved != null) {
+      request.onProceed(
+        WebViewCredential(user: saved.user, password: saved.password),
+      );
+      return;
+    }
 
-    if (credential == null) {
+    // 2) 没记住 → 弹框。
+    //    `_authDialogOpen` 防的是同一个挑战被连续触发（page + 子资源各来一次），
+    //    那会在屏幕上叠出好几个对话框。
+    if (_authDialogOpen) {
+      request.onCancel();
+      return;
+    }
+    _authDialogOpen = true;
+
+    BasicCredential? entered;
+    try {
+      entered = await showDialog<BasicCredential>(
+        context: context,
+        barrierDismissible: false,
+        builder: (BuildContext context) => _BasicAuthDialog(host: request.host),
+      );
+    } finally {
+      _authDialogOpen = false;
+    }
+
+    if (entered == null) {
       request.onCancel();
       return;
     }
 
+    // 3) 记下来给下次用，然后送去。
+    await widget.credentials.write(request.host, entered);
+    if (!mounted) {
+      request.onCancel();
+      return;
+    }
     request.onProceed(
-      WebViewCredential(
-        user: credential.user,
-        password: credential.password,
-      ),
+      WebViewCredential(user: entered.user, password: entered.password),
     );
   }
 
@@ -147,9 +195,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
 
     if (host != null && kKnownHosts.contains(host)) {
       await error.proceed();
-      if (mounted && !_certificateAccepted) {
-        setState(() => _certificateAccepted = true);
-      }
       return;
     }
 
@@ -288,23 +333,14 @@ class _WebViewScreenState extends State<WebViewScreen> {
     );
   }
 
+  /// WebView 占满整屏。
+  ///
+  /// 早先这里会显示一条"已放行 xxx 的自签证书"的横幅，**已去掉**：
+  /// 放行是设计好的正常行为（白名单内的入口本来就该直接能用），
+  /// 每次连接都弹条提示纯属噪音。真要排查放行情况，看代码里的
+  /// [_onSslAuthError] 即可 —— 不在放行路径上打扰用户。
   Widget _buildWebView() {
-    return Column(
-      children: <Widget>[
-        if (_certificateAccepted)
-          MaterialBanner(
-            content: Text('已放行 ${widget.entry.uri.host} 的自签证书'),
-            leading: const Icon(Icons.lock_outline),
-            actions: <Widget>[
-              TextButton(
-                onPressed: () => setState(() => _certificateAccepted = false),
-                child: const Text('知道了'),
-              ),
-            ],
-          ),
-        Expanded(child: WebViewWidget(controller: _controller)),
-      ],
-    );
+    return WebViewWidget(controller: _controller);
   }
 
   Widget _buildErrorView(String message) {
@@ -351,14 +387,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
   }
 }
 
-/// 一次 Basic 认证的凭据。只在内存里活到回调结束，绝不落盘。
-class _Credential {
-  const _Credential(this.user, this.password);
-
-  final String user;
-  final String password;
-}
-
 /// Basic 凭据输入框。
 ///
 /// 一个独立的 StatefulWidget 是因为要管两个 TextEditingController 的生命周期；
@@ -395,7 +423,7 @@ class _BasicAuthDialogState extends State<_BasicAuthDialog> {
     if (user.isEmpty || password.isEmpty) {
       return;
     }
-    Navigator.of(context).pop(_Credential(user, password));
+    Navigator.of(context).pop(BasicCredential(user, password));
   }
 
   @override

@@ -3,9 +3,9 @@
 本目录（`~/dev/dsh-pocket`）中 agent 的工作指南：**Flutter 套壳 WebView 客户端**，
 目标是在 **Android 手机**和 **macOS（Apple Silicon）** 上打开就能连上 `dsh web`。
 
-> 状态：**业务代码已写完 + 40 个测试通过 + APK 可构建**；
+> 状态：**业务代码已写完 + 47 个测试通过 + APK 可构建**；
 > Android 真机已跑过（发现并修掉了两个"静默失败"级 bug，见认证事实第 1、2 条），
-> **但 Cookie 持久化、证书白名单、内网直连仍未验；macOS 完全未验**（见 §8 清单）。
+> **但凭据记忆、Cookie 持久化、证书白名单、内网直连仍未验；macOS 完全未验**（见 §8 清单）。
 > 先读完本文件再动手；尤其先读「认证模型」和「雷区」。
 >
 > ⚠️ 本文件的 §4、雷区 2、3，以及认证事实第 1、2 条，都曾被真机实测证伪并已改写。
@@ -39,11 +39,18 @@
 
 | 层 | 客户端怎么知道 | 客户端该做什么 |
 |---|---|---|
-| **HTTP Basic 挑战** | WebView 回调 `onHttpAuthRequest` | **自己弹框收凭据**再 `onProceed`。见认证事实 2 |
+| **HTTP Basic 挑战** | WebView 回调 `onHttpAuthRequest` | 用**记住的凭据**自动应答；没有才弹框。见认证事实 2 |
 | **URL 里的启动令牌** | 用户粘贴的地址带 `?token=…` | 用它走**一次**导航，换回长期 Cookie。见认证事实 1 |
 
-两层都过了之后，服务端会种下**长期有效的 Cookie**，
-所以之后重新打开 App 应该直接就进去了（见 §6 启动流程）。
+⚠️ **Cookie 不能替代 Basic 凭据** —— 这条是实测出来的，别搞反：
+
+```
+带有效的会话 Cookie、但不带 Basic 凭据 → 401
+```
+
+Basic 挑战是**每个请求**都查的（实测过：同一 Cookie 连发两次，两次都 401）。
+所以"第二次打开免口令"**只能**靠记住凭据（见认证事实 2），
+Cookie 只解决"会话"那一层。
 
 ### 三个必须记住的认证事实
 
@@ -62,8 +69,13 @@
    `httpAuthHandler.cancel()`（`android_webview_controller.dart:1553` 的 `else` 分支）。
    **症状：页面静默死掉 —— 没有错误页、没有回调、一片空白，加载进度卡住。**
    正确做法见 `lib/webview_screen.dart` 的 `_onHttpAuthRequest`（自己弹框 + `onProceed`）。
-3. **凭据是长期 Cookie**，所以"第二次打开免登录"是**行为要求**：
-   只要 WebView 的 Cookie 持久化，重开就应该直接进。
+3. **服务端会种长期 Cookie，但它只顶替会话层，顶替不了 Basic 凭据。**
+   → "第二次打开不用输口令"靠的是 **`CredentialStore` 记住凭据**：
+   挑战来了先自动应答（`lib/webview_screen.dart` 的 `_onHttpAuthRequest`），
+   用户看不到框；没有记住的才弹框。
+   凭据存在系统密钥库（`flutter_secure_storage`），**不是** shared_preferences
+   （那是明文，口令放进去等于裸奔）。
+
    **注意**：Android WebView 默认就接受 Cookie 并落盘，插件**没有**开关给你开
    （详见雷区 3 —— 原文档这里写的 API 不存在）。
 
@@ -76,6 +88,7 @@
 | `webview_flutter` ^4.14.1 | 官方插件，Android/macOS 一套 API；macOS 端用 WKWebView |
 | `url_launcher` | "用系统浏览器打开"（某些登录/OAuth 场景 WebView 会失败） |
 | `shared_preferences` | 记住上次地址，轻量够用，不引数据库 |
+| `flutter_secure_storage` | 记住 Basic 凭据。**口令不能进 shared_preferences**（明文） |
 | **不自绘 WebView** | PlatformView 的坑远多于收益 |
 
 **平台范围**：`android` + `macos`（+ `linux` 仅因本机是 Linux，方便在开发机上冒烟测试）。
@@ -124,9 +137,9 @@ dsh-pocket/
 ├── pubspec.yaml
 ├── assets/brand/              ← DSH 官方 logo（见下）
 ├── tool/make_icons.py         ← 从 SVG 生成各平台图标（纯 pycairo，无新依赖）
-├── lib/                       ← 业务代码（7 个文件，见 §6 的表）
+├── lib/                       ← 业务代码（8 个文件，见 §6 的表）
 ├── android/ macos/ linux/
-└── test/                      ← 40 个用例：entry_parser / home_screen
+└── test/                      ← 47 个用例：entry_parser / home_screen / credential_store
 ```
 
 ### 图标与品牌资源
@@ -180,13 +193,16 @@ dsh-pocket/
    （**可能为空** —— 开源构建就是空的，此时首屏留空让用户自己填）。
    存进去的一律是规范化后的 origin（`scheme://host[:port]/`），**不含 `?token=`**。
    但用户这次粘贴进来的令牌要留在内存里，用 `launchUri` 走第一次导航（见认证事实第 1 条）。
-   **有地址就直接进 WebView，不再让用户点一次「连接」** —— 凭证是 365 天的
-   Cookie，重新打开本来就该是现成的界面。只有"没有任何地址"时才停在输入框。
+   **有地址就直接进 WebView，不再让用户点一次「连接」**。
+   要不要输口令则取决于 `CredentialStore` 里有没有这个 host 的凭据：
+   有就自动应答（用户看不到框），没有才弹框。只有"没有任何地址"时才停在输入框。
    ⚠️ 因为会自动进入，[WebViewScreen] 的错误页必须有「换个地址」的退路
    （`onChangeAddress`），否则服务端没开时用户会被困在错误页出不来。
 2. 建 WebView。Cookie 持久化不用手动开（见雷区 3）。
 3. 处理自签证书（见雷区 1、2）→ **只对白名单 host 放行**，其余拒绝并显示原因。
-4. 加载地址。**自己弹框收凭据**（`onHttpAuthRequest` → 对话框 → `onProceed`）。
+4. 加载地址。**自己处理凭据**（`onHttpAuthRequest`）：
+   先查 `CredentialStore` 有没有记住 → 有就直接 `onProceed`，
+   没有才弹框收，收到后**存进密钥库**再 `onProceed`。
    ⚠️ 别指望 WebView 原生 UI，理由见上面「认证事实」第 2 条。
 5. 凭据通过后，若 URL 带 `?token=`，服务端会把它换成长期 Cookie。
 
@@ -197,9 +213,10 @@ dsh-pocket/
 | `config.dart` | 构建时可注入的配置常量集中处 |
 | `entry_parser.dart` | 地址解析/校验 + 扫码 URL 解析。**纯 Dart，无 Flutter 依赖**，被测试完整覆盖 |
 | `entry_store.dart` | `shared_preferences` 持久化，只存 origin |
+| `credential_store.dart` | **凭据持久化**，走系统密钥库。按 host 分开存 |
 | `home_screen.dart` | 首屏：logo + 地址输入 + 连接 |
 | `webview_screen.dart` | WebView、证书白名单、进度条、错误重试页 |
-| `settings_screen.dart` | 换地址、退出登录（清 Cookie）、系统浏览器打开 |
+| `settings_screen.dart` | 换地址、退出登录（清 Cookie + 凭据）、忘掉凭据、系统浏览器打开 |
 | `main.dart` | 根 App，只定主题 + 注入 `EntryStore` |
 
 ### 必须有的 UI
@@ -214,7 +231,8 @@ dsh-pocket/
   （自己弹框）。这两件事不矛盾：前者是"拿到 401 响应后别自作聪明"，
   后者是"挑战阶段必须应答，否则请求被静默取消"。见认证事实第 2 条。
 - 不要把令牌写进日志/持久化。地址栏里的 `?token=` 是**一次性**的。
-- 不要把凭据落盘或写日志；它只应活在 `_onHttpAuthRequest` 的局部变量里。
+- 不要把凭据写日志。它**要**持久化（否则每次都要重输），但只能进系统密钥库
+  （`CredentialStore`），**不要**塞进 `shared_preferences`。
 - 不要 `WebViewController.loadRequest` 硬编码地址而忽略用户存的地址。
 
 ---
@@ -259,10 +277,14 @@ dsh-pocket/
 6. **端口会变**：自建部署的入口端口可能被自动分配或调整，所以客户端
    **不能假设端口是固定的** —— 地址要可编辑、要能从粘贴/扫码导入。
 7. **不要在本仓库里放服务端的运维脚本或配置。** 那是另一个项目的事。
-8. **Android 明文流量**：内网入口通常是 `http://<内网IP>/`（明文）。Android 9+ 默认
+8. **凭据必须存密钥库，不要图省事用 shared_preferences。**
+   后者在 Android 上是个明文 XML、在 macOS 上是明文 plist ——
+   口令放进去等于裸奔。用 `flutter_secure_storage`（Android Keystore /
+   macOS Keychain）。它有 `minSdk 24` 要求，与本项目一致。
+9. **Android 明文流量**：内网入口通常是 `http://<内网IP>/`（明文）。Android 9+ 默认
    禁明文，要连内网必须配 `network_security_config.xml` **只对这一个内网地址**放行
    `cleartextTrafficPermitted`，**不要**全局开 `usesCleartextTraffic="true"`。
-9. **别把 `flutter create` 重新跑一遍**：会覆盖 `AndroidManifest.xml`、`AppInfo.xcconfig`、
+10. **别把 `flutter create` 重新跑一遍**：会覆盖 `AndroidManifest.xml`、`AppInfo.xcconfig`、
    图标等已定制的东西。要加平台用 `flutter create --platforms=xxx .` 并**先看 diff**。
 
 ---
@@ -276,7 +298,7 @@ cd ~/dev/dsh-pocket
 
 # 1) 静态检查（每次必跑）+ 测试
 flutter analyze
-flutter test                          # 40 个用例：解析器 + 首屏 + EntryStore
+flutter test                          # 47 个用例：解析器 + 首屏 + 存储
 
 # 2) 构建 APK（必须带上 JAVA_HOME，见 §4）
 JAVA_HOME=$HOME/.jdks/TencentKona-21.0.12.b1 flutter build apk --debug
@@ -319,8 +341,8 @@ curl -k -s -o /dev/null -w '入口 -> %{http_code}\n' --max-time 6 https://<你�
 #    预期 401 = 服务端在（且要求认证）；返回 000 = 没开或网络不通
 ```
 
-**已在本机验证**（2026-09-30）：`flutter analyze` 无问题；`flutter test` 40/40 通过；
-`flutter build apk --release --target-platform android-arm64` 成功（17.9MB），
+**已在本机验证**（2026-09-30）：`flutter analyze` 无问题；`flutter test` 47/47 通过；
+`flutter build apk --release --target-platform android-arm64` 成功（18.3MB），
 且已核验 APK 里 `INTERNET` 权限在、`networkSecurityConfig` 指向的
 `cleartextTrafficPermitted` 只对 `-P dshCleartextHost` 指定的那一个 host 生效
 （不传则是 `invalid.invalid`，等于不豁免）；`flutter build linux` 通过且能启动。
@@ -330,7 +352,9 @@ curl -k -s -o /dev/null -w '入口 -> %{http_code}\n' --max-time 6 https://<你�
 - [ ] Android 真机：粘贴带 `?token=` 的二维码地址 → 输口令 → 进入 dsh 界面
       （曾经缺 token 会看到 dsh 自己的 "authentication required" 纯文本）
 - [ ] Android 真机：顶栏不再显示网址，只有 logo + 进度/刷新/设置
-- [ ] Android 真机：**杀进程重开，应该免登录**（验 Cookie 持久化，雷区 3）
+- [ ] Android 真机：**杀进程重开，应该免输口令**（验 `CredentialStore` 生效）
+      —— 第一次输完口令后，再打开不该再弹框。**这是本次改动的核心验证点**
+- [ ] Android 真机：设置页「忘掉凭据」之后，下次打开应该重新弹框
 - [ ] Android 真机：自签证书能"继续访问"（雷区 1）；**再试一个未知 host，应被拒绝**
       —— 这条同时验证白名单没被写成"全局放行"，是安全性的关键回归点
 - [ ] Android 真机：内网 `http://<内网IP>/` 能直连（验 `-P dshCleartextHost` 生效）
@@ -350,5 +374,7 @@ curl -k -s -o /dev/null -w '入口 -> %{http_code}\n' --max-time 6 https://<你�
       用户路径：用任意扫码 App 扫服务端给出的二维码，
       复制文本 → App 首屏的**粘贴按钮** → 自动校验并保留令牌。
 - [x] README.md（**有意保持简短**：这是私用项目，不是产品文档）
+- [x] 记住 HTTP Basic 凭据（`credential_store.dart` + `flutter_secure_storage`），
+      免得每次打开都要重输口令。设置页有「忘掉凭据」「退出登录」两个入口
 - [ ] app 图标已生成，但**尚未在真机确认显示效果**
 - [ ] Android 真机 / macOS 实测（见 §8 清单）—— **这是当前最大的未验证面**

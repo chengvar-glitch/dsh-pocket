@@ -3,6 +3,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import 'config.dart';
+import 'credential_store.dart';
 import 'entry_parser.dart';
 import 'entry_store.dart';
 
@@ -13,10 +14,14 @@ class SettingsScreen extends StatefulWidget {
   const SettingsScreen({
     super.key,
     required this.store,
+    required this.credentials,
     required this.currentEntry,
   });
 
   final EntryStore store;
+
+  /// 用于"忘掉已记住的凭据"。
+  final CredentialStore credentials;
 
   /// 当前入口。为 null 表示还没连过、且构建时也没配默认值。
   final Uri? currentEntry;
@@ -49,9 +54,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  /// "退出登录"：清掉 WebView 的 Cookie。
+  /// "退出登录"：清掉 WebView 的 Cookie **和**记住的凭据。
   ///
-  /// 会话就是服务端种下的那个长期 Cookie，所以清 Cookie 等价于登出。
+  /// 两样都要清，否则自相矛盾：只清 Cookie 的话，下次打开时
+  /// 记住的口令会自动把我们送回去，"退出"等于没退。
+  ///
   /// **不去动用户的地址** —— 退出登录和忘掉地址是两件事。
   Future<void> _clearCookies() async {
     final bool confirmed =
@@ -60,8 +67,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           builder: (BuildContext context) => AlertDialog(
             title: const Text('退出登录'),
             content: const Text(
-              '将清除 WebView 里保存的登录 Cookie。\n'
-              '下次连接需要重新输入凭据。\n\n'
+              '将清除 WebView 里的登录 Cookie，以及已记住的凭据。\n'
+              '下次连接需要重新输入。\n\n'
               '（不会清除已记住的入口地址）',
             ),
             actions: <Widget>[
@@ -81,10 +88,37 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (!confirmed) return;
 
     await WebViewCookieManager().clearCookies();
+
+    // 顺手清掉记住的凭据（当前 host 的那个）。
+    final Uri? current = widget.currentEntry;
+    if (current != null) {
+      await widget.credentials.delete(current.host);
+    }
+
     if (!mounted) return;
     ScaffoldMessenger.of(
       context,
-    ).showSnackBar(const SnackBar(content: Text('已清除登录 Cookie')));
+    ).showSnackBar(const SnackBar(content: Text('已退出登录')));
+  }
+
+  /// 单独忘掉记住的凭据（保留 Cookie）。
+  ///
+  /// 什么时候用：换了口令、但不想把会话也踢掉。
+  /// 单独放一个入口而不是塞进"退出登录"，是因为这两件事的意图不同。
+  Future<void> _forgetCredential() async {
+    final Uri? current = widget.currentEntry;
+    if (current == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('还没设置入口地址')));
+      return;
+    }
+
+    await widget.credentials.delete(current.host);
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('已忘掉 ${current.host} 的凭据')));
   }
 
   /// 用系统浏览器打开当前入口。
@@ -165,8 +199,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ListTile(
             leading: const Icon(Icons.logout),
             title: const Text('退出登录'),
-            subtitle: const Text('清除登录 Cookie，保留入口地址'),
+            subtitle: const Text('清除 Cookie 和记住的凭据，保留入口地址'),
             onTap: _clearCookies,
+          ),
+          ListTile(
+            leading: const Icon(Icons.key_off_outlined),
+            title: const Text('忘掉凭据'),
+            subtitle: const Text('只忘口令，不退会话（换了口令时用）'),
+            onTap: _forgetCredential,
           ),
           ListTile(
             leading: const Icon(Icons.restart_alt),

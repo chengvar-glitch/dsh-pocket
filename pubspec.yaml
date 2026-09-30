@@ -29,6 +29,12 @@ dependencies:
   # 本地记住入口地址等轻量配置
   shared_preferences: ^2.3.0
 
+  # 记住 HTTP Basic 凭据，免得每次打开都要重输口令。
+  #
+  # 为什么不用 shared_preferences 存：那是个明文 XML/plist，口令放进去
+  # 等于裸奔。这里用系统密钥库（Android Keystore / macOS Keychain）。
+  flutter_secure_storage: ^11.1.1
+
   cupertino_icons: ^1.0.8
 
 dev_dependencies:

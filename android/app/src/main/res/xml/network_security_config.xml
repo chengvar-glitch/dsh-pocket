@@ -1,8 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  由 android/app/build.gradle.kts 在构建时重写，请勿手改。
-  当前豁免的明文 host：invalid.invalid
-  改它用 -P dshCleartextHost=<host>，说明见 build.gradle.kts。
+  这个文件会在构建时被 android/app/build.gradle.kts 重写（见那里的注释）。
+  仓库里保留这一份"安全默认值"：invalid.invalid 是保留域名，
+  匹配不到任何真实主机，等于「不开任何明文豁免」。
+
+  需要连内网（http://）的人这样构建：
+    flutter build apk --release -P dshCleartextHost=<你的内网IP>
+
+  为什么不在这里写真实 IP：这是开源仓库，内网地址是私有的。
+  为什么不在 application 上开 usesCleartextTraffic="true"：
+  那是对所有域名放开明文，是雷区 8 明确禁止的做法。
 -->
 <network-security-config>
     <domain-config cleartextTrafficPermitted="true">

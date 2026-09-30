@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'config.dart';
+import 'credential_store.dart';
 import 'entry_parser.dart';
 import 'entry_store.dart';
 import 'settings_screen.dart';
@@ -12,9 +13,16 @@ import 'webview_screen.dart';
 /// 只有一个职责：决定"连哪儿"，然后把地址交给 [WebViewScreen]。
 /// 连接后的所有事（认证、页面）都归 WebView 管，这层不插手。
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key, required this.store});
+  const HomeScreen({
+    super.key,
+    required this.store,
+    required this.credentials,
+  });
 
   final EntryStore store;
+
+  /// 透传给 WebView 页 / 设置页 —— 这层不碰凭据，只负责把依赖传下去。
+  final CredentialStore credentials;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -147,6 +155,7 @@ class _HomeScreenState extends State<HomeScreen> {
       MaterialPageRoute<Uri>(
         builder: (_) => SettingsScreen(
           store: widget.store,
+          credentials: widget.credentials,
           // 没连过就可能没有当前入口（开源构建下没配默认值）。
           // 传 null，让设置页自己显示"未设置"。
           currentEntry: _entry?.uri,
@@ -181,6 +190,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (entry != null) {
       return WebViewScreen(
         entry: entry,
+        credentials: widget.credentials,
         onOpenSettings: _openSettings,
         onChangeAddress: _backToEntryForm,
       );

@@ -1,4 +1,5 @@
 import 'package:dsh_pocket/config.dart';
+import 'package:dsh_pocket/credential_store.dart';
 import 'package:dsh_pocket/entry_parser.dart';
 import 'package:dsh_pocket/entry_store.dart';
 import 'package:dsh_pocket/home_screen.dart';
@@ -25,7 +26,12 @@ void main() {
 
   Future<void> pumpHome(WidgetTester tester) async {
     await tester.pumpWidget(
-      MaterialApp(home: HomeScreen(store: EntryStore())),
+      MaterialApp(
+        home: HomeScreen(
+          store: EntryStore(),
+          credentials: CredentialStore(),
+        ),
+      ),
     );
     // 等 _restoreSavedEntry 的异步落地。
     await tester.pumpAndSettle();

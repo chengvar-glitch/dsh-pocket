@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'credential_store.dart';
 import 'entry_store.dart';
 import 'home_screen.dart';
 
@@ -25,7 +26,10 @@ class DshPocketApp extends StatelessWidget {
           brightness: Brightness.dark,
         ),
       ),
-      home: HomeScreen(store: EntryStore()),
+      home: HomeScreen(
+        store: EntryStore(),
+        credentials: CredentialStore(),
+      ),
     );
   }
 }
