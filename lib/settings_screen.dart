@@ -9,7 +9,13 @@ import 'entry_store.dart';
 
 /// 设置页：换地址、退出登录、用系统浏览器打开。
 ///
-/// 返回一个 [Uri] 表示用户选了新入口（调用方据此重连）；返回 null 表示什么都没改。
+/// 返回一个 [EntryParseOk] 表示用户选了新入口（调用方据此重连）；返回 null 表示什么都没改。
+///
+/// ⚠️ 回传的必须是**整个** [EntryParseOk]，不能只回传 Uri：用户在「入口地址」
+/// 里粘进来的几乎一定是带 `?token=` 的完整链接，而令牌只活在
+/// [EntryParseOk.launchUri] 里。早期版本 `pop(uri)` 把令牌悄悄丢了，
+/// 现象就是"链接粘进去了、口令也输对了，却永远停在 authentication required"
+/// （真机日志显示那几次请求一次都没带上令牌，见 AGENTS.md 雷区 11）。
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({
     super.key,
@@ -48,9 +54,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     switch (result) {
       case EntryParseError(:final reason):
         setState(() => _inputError = reason);
-      case EntryParseOk(:final uri):
-        // 只返回地址，让上层决定什么时候重连。
-        Navigator.of(context).pop(uri);
+      case EntryParseOk():
+        // 只返回解析结果，让上层决定什么时候重连。
+        // **必须原样回传**（含 token），理由见类注释。
+        Navigator.of(context).pop(result);
     }
   }
 

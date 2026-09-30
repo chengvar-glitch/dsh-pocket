@@ -3,8 +3,8 @@
 本目录（`~/dev/dsh-pocket`）中 agent 的工作指南：**Flutter 套壳 WebView 客户端**，
 目标是在 **Android 手机**和 **macOS（Apple Silicon）** 上打开就能连上 `dsh web`。
 
-> 状态：**业务代码已写完 + 47 个测试通过 + APK 可构建**；
-> Android 真机已跑过（发现并修掉了两个"静默失败"级 bug，见认证事实第 1、2 条），
+> 状态：**业务代码已写完 + 50 个测试通过 + APK 可构建**；
+> Android 真机已跑过（发现并修掉了三个"静默失败"级 bug，见认证事实第 1、2 条与雷区 11），
 > **但凭据记忆、Cookie 持久化、证书白名单、内网直连仍未验；macOS 完全未验**（见 §8 清单）。
 > 先读完本文件再动手；尤其先读「认证模型」和「雷区」。
 >
@@ -139,7 +139,7 @@ dsh-pocket/
 ├── tool/make_icons.py         ← 从 SVG 生成各平台图标（纯 pycairo，无新依赖）
 ├── lib/                       ← 业务代码（8 个文件，见 §6 的表）
 ├── android/ macos/ linux/
-└── test/                      ← 47 个用例：entry_parser / home_screen / credential_store
+└── test/                      ← 50 个用例：entry_parser / home_screen / settings_screen / credential_store
 ```
 
 ### 图标与品牌资源
@@ -222,7 +222,10 @@ dsh-pocket/
 ### 必须有的 UI
 
 - 首屏：logo（用 `assets/brand/logo_white.png`）+ 地址输入框 + 「连接」按钮。
-- WebView 页：**加载进度条**、**出错时的可重试提示页**（别留白屏）、返回/刷新。
+- WebView 页：**加载进度条**、**出错时的可重试提示页**（别留白屏）、返回/刷新、
+  以及**会话失效时的出口**：dsh 自己的 401 是一页纯文本、不是加载失败，
+  WebView 会老老实实渲染它，所以要识别出来并给一个「粘贴新链接」的按钮
+  （见 `_checkSessionExpired`）。没有它，用户会卡在一句英文上出不来。
 - 设置：切换地址、清除 Cookie（"退出登录"）、"在系统浏览器打开"、显示当前入口。
 
 ### 明确不要做的事
@@ -286,6 +289,17 @@ dsh-pocket/
    `cleartextTrafficPermitted`，**不要**全局开 `usesCleartextTraffic="true"`。
 10. **别把 `flutter create` 重新跑一遍**：会覆盖 `AndroidManifest.xml`、`AppInfo.xcconfig`、
    图标等已定制的东西。要加平台用 `flutter create --platforms=xxx .` 并**先看 diff**。
+11. **凡能把地址交到 WebView 的路径，都必须把 `?token=` 一起带过去 —— 不许用 `Uri` 重造
+    `EntryParseOk`。** 踩过（2026-09-30 真机）：设置页的「入口地址」是用户**唯一够得着**的
+    粘贴口（App 存过地址就直接进 WebView，首屏那个粘贴按钮根本看不见），
+    而 `_apply()` 当时只 `pop(uri)`、上层又 `EntryParseOk(updated)` 重建 → 令牌被丢掉。
+    现象：链接粘进去了、Basic 口令也输对了，页面却永远停在
+    `dsh web authentication required`；服务端日志显示那几次请求**一次都没带上令牌**
+    （带上令牌的那次会返回 303 跳转）。
+    **先看服务端日志再改客户端** —— "没带令牌"和"令牌无效"是两种完全不同的故障，
+    日志一眼能分开，别靠猜。回归测试：`test/settings_screen_test.dart`。
+12. **设置页改的地址也要落盘**（`_saveQuietly(updated.uri)`），否则杀掉进程重开又回旧地址 ——
+    这个 bug 与上一条在同一个函数里，一起修的。
 
 ---
 
@@ -298,7 +312,7 @@ cd ~/dev/dsh-pocket
 
 # 1) 静态检查（每次必跑）+ 测试
 flutter analyze
-flutter test                          # 47 个用例：解析器 + 首屏 + 存储
+flutter test                          # 50 个用例：解析器 + 首屏 + 设置页 + 存储
 
 # 2) 构建 APK（必须带上 JAVA_HOME，见 §4）
 JAVA_HOME=$HOME/.jdks/TencentKona-21.0.12.b1 flutter build apk --debug
@@ -341,7 +355,7 @@ curl -k -s -o /dev/null -w '入口 -> %{http_code}\n' --max-time 6 https://<你�
 #    预期 401 = 服务端在（且要求认证）；返回 000 = 没开或网络不通
 ```
 
-**已在本机验证**（2026-09-30）：`flutter analyze` 无问题；`flutter test` 47/47 通过；
+**已在本机验证**（2026-09-30）：`flutter analyze` 无问题；`flutter test` 50/50 通过；
 `flutter build apk --release --target-platform android-arm64` 成功（18.3MB），
 且已核验 APK 里 `INTERNET` 权限在、`networkSecurityConfig` 指向的
 `cleartextTrafficPermitted` 只对 `-P dshCleartextHost` 指定的那一个 host 生效

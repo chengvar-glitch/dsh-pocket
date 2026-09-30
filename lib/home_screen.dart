@@ -150,25 +150,33 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   /// 从设置页回来后，如果地址变了，要重新连接。
+  ///
+  /// ⚠️ 收的是**整个** [EntryParseOk]，不是 Uri —— 设置页里粘进来的链接
+  /// 通常带 `?token=`，那是这次导航唯一的机会（见认证事实 1）。
+  /// 早期版本只回传 Uri 再 `EntryParseOk(updated)` 重建，令牌就这么没了，
+  /// 真机上的表现是"链接粘了也进不去，服务端日志显示每次请求都没带上令牌"。
   Future<void> _openSettings() async {
-    final Uri? updated = await Navigator.of(context).push<Uri>(
-      MaterialPageRoute<Uri>(
-        builder: (_) => SettingsScreen(
-          store: widget.store,
-          credentials: widget.credentials,
-          // 没连过就可能没有当前入口（开源构建下没配默认值）。
-          // 传 null，让设置页自己显示"未设置"。
-          currentEntry: _entry?.uri,
-        ),
-      ),
-    );
+    final EntryParseOk? updated = await Navigator.of(context)
+        .push<EntryParseOk>(
+          MaterialPageRoute<EntryParseOk>(
+            builder: (_) => SettingsScreen(
+              store: widget.store,
+              credentials: widget.credentials,
+              // 没连过就可能没有当前入口（开源构建下没配默认值）。
+              // 传 null，让设置页自己显示"未设置"。
+              currentEntry: _entry?.uri,
+            ),
+          ),
+        );
 
     if (!mounted || updated == null) return;
     setState(() {
-      _addressController.text = updated.toString();
-      // 从设置页改地址走的是同一个解析器，令牌同样只留在内存里。
-      _entry = EntryParseOk(updated);
+      _addressController.text = updated.launchUri.toString();
+      _entry = updated;
     });
+    // 在设置页换的地址也要记住，否则杀掉进程重开又回到旧地址
+    // （只存 origin，令牌照旧不落盘）。
+    _saveQuietly(updated.uri);
   }
 
   /// 从 WebView 错误页退回输入框，让用户改地址。

@@ -2,7 +2,7 @@ name: dsh_pocket
 description: "DSH Pocket —— 用 Flutter WebView 把 dsh web 装进手机/Mac 的口袋里。"
 publish_to: 'none'
 
-version: 1.0.0+1
+version: 1.0.1+2
 
 environment:
   sdk: ^3.13.3

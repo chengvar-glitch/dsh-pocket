@@ -64,6 +64,17 @@ class _WebViewScreenState extends State<WebViewScreen> {
   /// 凭据又不对时每一发都会回调。只弹一次框，别让用户被对话框淹没。
   bool _authDialogOpen = false;
 
+  /// 当前页是不是 dsh 自己的 401 纯文本页（既没令牌也没有效 Cookie）。
+  ///
+  /// **为什么需要它**：这一页不是"加载失败"—— 它是正常的 200 响应体，
+  /// WebView 老老实实渲染出来，所以既不会走 [_onWebResourceError]、
+  /// 也不会走错误页。用户看到的是一句英文
+  /// `dsh web authentication required; reopen the URL printed by dsh web.`
+  /// 和一片死路（这正是真机上"粘了链接却永远进不去"的那一屏）。
+  ///
+  /// 判据只认那句英文，探测失败一律当作"不是"，绝不影响正常页面。
+  bool _sessionExpired = false;
+
   @override
   void initState() {
     super.initState();
@@ -88,11 +99,14 @@ class _WebViewScreenState extends State<WebViewScreen> {
             setState(() {
               _error = null;
               _progress = 0;
+              _sessionExpired = false;
             });
           },
           onPageFinished: (_) {
             if (!mounted) return;
             setState(() => _progress = 100);
+            // 这一页有可能就是 dsh 的 401 纯文本页（见 [_checkSessionExpired]）。
+            unawaited(_checkSessionExpired());
           },
           onWebResourceError: _onWebResourceError,
           onSslAuthError: _onSslAuthError,
@@ -101,6 +115,29 @@ class _WebViewScreenState extends State<WebViewScreen> {
           // 而 401 是在此之前由 WebView 抛出 auth 挑战，走 onHttpAuthRequest。
         ),
       );
+  }
+
+  /// 检查当前页是不是 dsh 的 401 纯文本页，是就把横幅亮出来。
+  ///
+  /// 用 JS 读 body 文本而不是 `onHttpError`：后者按 AGENTS.md 的规矩**不能**用来
+  /// 判 401（401 是 WebView 在挑战阶段处理的，`onHttpError` 拿到的语义不一样，
+  /// 当成错误页会把正常的认证流程也拦掉）。这里纯粹是"页面渲染完之后看一眼内容"。
+  ///
+  /// 任何异常都静默放过 —— 探测只是锦上添花，绝不能因为它影响正常页面。
+  Future<void> _checkSessionExpired() async {
+    bool expired;
+    try {
+      final Object result = await _controller.runJavaScriptReturningResult(
+        "document.body && document.body.innerText"
+        ".indexOf('authentication required') >= 0 ? 1 : 0",
+      );
+      final String text = result.toString();
+      expired = text == '1' || text == 'true';
+    } catch (_) {
+      return;
+    }
+    if (!mounted || expired == _sessionExpired) return;
+    setState(() => _sessionExpired = expired);
   }
 
   /// 处理 HTTP Basic 挑战。
@@ -329,7 +366,54 @@ class _WebViewScreenState extends State<WebViewScreen> {
             ),
         ],
       ),
-      body: error != null ? _buildErrorView(error) : _buildWebView(),
+      body: error != null
+          ? _buildErrorView(error)
+          : Column(
+              children: <Widget>[
+                if (_sessionExpired) _buildSessionExpiredBanner(),
+                Expanded(child: _buildWebView()),
+              ],
+            ),
+    );
+  }
+
+  /// 会话失效时的横幅：告诉用户"为什么进不去"和"怎么出去"。
+  ///
+  /// 没有它的话，用户看到的就是 dsh 那句英文纯文本，页面里没有任何可点的东西 ——
+  /// 而 App 因为存过地址会直接进 WebView，首屏那个「粘贴」按钮根本够不着。
+  /// 这条横幅是那一屏唯一的出口。
+  Widget _buildSessionExpiredBanner() {
+    final ColorScheme colors = Theme.of(context).colorScheme;
+    return Material(
+      color: colors.errorContainer,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 10, 8, 10),
+        child: Row(
+          children: <Widget>[
+            Icon(
+              Icons.key_off_outlined,
+              size: 20,
+              color: colors.onErrorContainer,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                '登录已失效（令牌过期，或这台设备还没有会话）。'
+                '回地址页粘一次完整链接即可。',
+                style: TextStyle(
+                  color: colors.onErrorContainer,
+                  fontSize: 13,
+                ),
+              ),
+            ),
+            if (widget.onChangeAddress != null)
+              TextButton(
+                onPressed: widget.onChangeAddress,
+                child: const Text('粘贴新链接'),
+              ),
+          ],
+        ),
+      ),
     );
   }
 
