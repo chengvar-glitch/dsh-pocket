@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  由 android/app/build.gradle.kts 在构建时重写，请勿手改。
+  当前豁免的明文 host：invalid.invalid
+  改它用 -P dshCleartextHost=<host>，说明见 build.gradle.kts。
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">invalid.invalid</domain>
+    </domain-config>
+</network-security-config>

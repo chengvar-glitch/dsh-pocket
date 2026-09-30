@@ -1,0 +1,48 @@
+name: dsh_pocket
+description: "DSH Pocket —— 用 Flutter WebView 把 dsh web 装进手机/Mac 的口袋里。"
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.13.3
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # 套壳的核心：官方 WebView 插件。
+  # Android 走 webview_flutter_android，macOS 走 webview_flutter_wkwebview，
+  # 两端统一 API，不用自己写 PlatformView。
+  webview_flutter: ^4.14.1
+
+  # 下面两个是 webview_flutter 的平台实现。正常只作为传递依赖存在，
+  # 但 lib/webview_screen.dart 需要在 SSL 回调里访问平台特有的 host/url 字段
+  # （公共层没暴露，见那里的 _hostOfSslError 注释），所以显式声明，
+  # 避免"隐式依赖传递依赖"这种一升级就崩的耦合。
+  webview_flutter_android: ^4.14.1
+  webview_flutter_wkwebview: ^3.26.2
+
+  # 设置页"用系统浏览器打开"、自签 CA 安装指引
+  url_launcher: ^6.3.0
+
+  # 本地记住入口地址等轻量配置
+  shared_preferences: ^2.3.0
+
+  cupertino_icons: ^1.0.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    # DSH 官方 logo：取自 @deepseek-ai/dsh-web-frontend 的 dist/favicon.svg
+    # 黑/白两版 + 预渲染 PNG（App 内显示用，避免运行时解析 SVG）
+    - assets/brand/dsh-logo-black.svg
+    - assets/brand/dsh-logo-white.svg
+    - assets/brand/logo_white.png
+    - assets/brand/logo_black.png

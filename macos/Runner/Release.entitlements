@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<!-- 必需：见 DebugProfile.entitlements 里的同一条注释。
+	     release 包同样在沙箱里，少了它连不上任何服务器。 -->
+	<key>com.apple.security.network.client</key>
+	<true/>
+</dict>
+</plist>
